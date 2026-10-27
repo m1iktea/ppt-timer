@@ -16,26 +16,27 @@ const (
 	// 连续这么多次检测不到放映才判定退出，避免 WPS 切换动画时窗口短暂消失导致误关
 	stopAfterMisses = 3
 
-	baseWidth    = 180 // 96 DPI 下的尺寸，运行时按 DPI 缩放
-	baseHeight   = 70
-	baseFontSize = 48
-	baseMargin   = 16
+	baseWidth    = 110 // 96 DPI 下的尺寸，运行时按 DPI 缩放
+	baseHeight   = 40
+	baseFontSize = 28
+	baseMargin   = 12
 	// 透明底：用色键把背景色整块抠掉，只留下文字
 	transparentKey = 0xFFFFFF // 白色，与 rgb(255,255,255) 一致
 )
 
 type timerApp struct {
-	cfg       config
-	cfgPath   string
-	hwnd      uintptr
-	font      uintptr
-	bgBrush   uintptr
-	dpi       int32
-	running   bool
-	startedAt time.Time
-	period    time.Duration
-	misses    int
-	debug     *debugLog
+	cfg      config
+	cfgPath  string
+	hwnd     uintptr
+	font     uintptr
+	bgBrush  uintptr
+	dpi      int32
+	inShow   bool // 检测到正在放映
+	timerOn  bool // 计时窗开启（放映中可用 Ctrl+R 关闭/重开）
+	roundEnd time.Time
+	period   time.Duration
+	misses   int
+	debug    *debugLog
 }
 
 var app *timerApp
@@ -76,34 +77,54 @@ func (a *timerApp) onTick() {
 	switch {
 	case active:
 		a.misses = 0
-		if !a.running {
-			a.start()
+		if !a.inShow {
+			a.enterShow()
 		}
-	case a.running:
+	case a.inShow:
 		a.misses++
 		if a.misses >= stopAfterMisses {
-			a.stop()
+			a.exitShow()
 		}
 	}
-	if a.running {
-		a.place() // 每次都重新置顶，防止被全屏放映窗口压住
-		procInvalidateRect.Call(a.hwnd, 0, 0)
-	}
+	a.refresh()
 }
 
-func (a *timerApp) start() {
+func (a *timerApp) enterShow() {
 	a.reloadConfig()
-	a.running = true
-	a.startedAt = time.Now()
-	a.period = time.Duration(a.cfg.Minutes * float64(time.Minute))
+	a.inShow = true
+	a.registerHotkeys()
+	a.startTimer()
 	a.debug.logf("放映开始，每轮倒计时 %.1f 分钟，到点自动进入下一轮", a.cfg.Minutes)
 }
 
-func (a *timerApp) stop() {
-	a.running = false
+func (a *timerApp) exitShow() {
+	a.inShow = false
 	a.misses = 0
-	procShowWindow.Call(a.hwnd, swHide)
+	a.unregisterHotkeys()
+	a.stopTimer()
 	a.debug.logf("放映结束，计时窗关闭")
+}
+
+// startTimer 从完整一轮开始计时。
+func (a *timerApp) startTimer() {
+	a.timerOn = true
+	a.period = time.Duration(a.cfg.Minutes * float64(time.Minute))
+	a.roundEnd = time.Now().Add(a.period)
+}
+
+func (a *timerApp) stopTimer() {
+	a.timerOn = false
+	procShowWindow.Call(a.hwnd, swHide)
+}
+
+// refresh 推进轮次并重绘；每次都重新置顶，防止被全屏放映窗口压住。
+func (a *timerApp) refresh() {
+	if !a.timerOn {
+		return
+	}
+	a.roundEnd = advanceRound(a.roundEnd, a.period, time.Now())
+	a.place()
+	procInvalidateRect.Call(a.hwnd, 0, 0)
 }
 
 // place 把计时窗放到主屏工作区的指定角落（扩展模式下主屏即讲者自己的屏幕）。
@@ -136,7 +157,7 @@ func (a *timerApp) paint() {
 	procSetTextColor.Call(hdc, rgb(0, 0, 0))
 	procSetBkMode.Call(hdc, bkTransparent)
 
-	text, _ := syscall.UTF16FromString(remainingText(a.startedAt, a.period, time.Now()))
+	text, _ := syscall.UTF16FromString(remainingText(a.roundEnd, time.Now()))
 	procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(&text[0])), uintptr(len(text)-1),
 		uintptr(unsafe.Pointer(&rc)), dtCenter|dtVCenter|dtSingleLine)
 }
@@ -145,6 +166,9 @@ func wndProc(hwnd, message, wParam, lParam uintptr) uintptr {
 	switch message {
 	case wmTimer:
 		app.onTick()
+		return 0
+	case wmHotkey:
+		app.onHotkey(wParam)
 		return 0
 	case wmPaint:
 		app.paint()

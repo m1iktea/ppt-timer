@@ -16,6 +16,13 @@ const (
 	wmClose      = 0x0010
 	wmEraseBkgnd = 0x0014
 	wmTimer      = 0x0113
+	wmHotkey     = 0x0312
+
+	modControl  = 0x0002
+	modNoRepeat = 0x4000
+
+	hotkeyToggle = 1
+	hotkeyExtend = 2
 
 	wsPopup   = 0x80000000
 	wsCaption = 0x00C00000
@@ -90,6 +97,8 @@ var (
 	procGetDC                      = user32.NewProc("GetDC")
 	procReleaseDC                  = user32.NewProc("ReleaseDC")
 	procMessageBoxW                = user32.NewProc("MessageBoxW")
+	procRegisterHotKey             = user32.NewProc("RegisterHotKey")
+	procUnregisterHotKey           = user32.NewProc("UnregisterHotKey")
 
 	procCreateFontW      = gdi32.NewProc("CreateFontW")
 	procCreateSolidBrush = gdi32.NewProc("CreateSolidBrush")

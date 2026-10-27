@@ -8,31 +8,74 @@ import (
 )
 
 func TestRemainingText(t *testing.T) {
-	start := time.Date(2026, 10, 27, 10, 0, 0, 0, time.UTC)
-	five := 5 * time.Minute
+	now := time.Date(2026, 10, 27, 10, 0, 0, 0, time.UTC)
 	tests := []struct {
-		name    string
-		period  time.Duration
-		elapsed time.Duration
-		want    string
+		name string
+		left time.Duration
+		want string
 	}{
-		{"刚开始", five, 0, "05:00"},
-		{"不足一秒向上取整", five, 900 * time.Millisecond, "05:00"},
-		{"过一秒", five, time.Second, "04:59"},
-		{"本轮最后一秒", five, 4*time.Minute + 59*time.Second, "00:01"},
-		{"到点进入第二轮", five, five, "05:00"},
-		{"第二轮中途", five, five + 90*time.Second, "03:30"},
-		{"第三轮末尾", five, 3*five - time.Second, "00:01"},
-		{"小数分钟", 150 * time.Second, 30 * time.Second, "02:00"},
-		{"超过一小时", 75 * time.Minute, 0, "75:00"},
-		{"时钟回拨按刚开始算", five, -10 * time.Second, "05:00"},
+		{"整 5 分钟", 5 * time.Minute, "05:00"},
+		{"不足一秒向上取整", 4*time.Minute + 59*time.Second + 100*time.Millisecond, "05:00"},
+		{"过一秒", 4*time.Minute + 59*time.Second, "04:59"},
+		{"加时后超过一轮", 9*time.Minute + 30*time.Second, "09:30"},
+		{"超过一百分钟", 125 * time.Minute, "125:00"},
+		{"已过截止", -time.Second, "00:00"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := remainingText(start, tt.period, start.Add(tt.elapsed)); got != tt.want {
+			if got := remainingText(now.Add(tt.left), now); got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAdvanceRound(t *testing.T) {
+	end := time.Date(2026, 10, 27, 10, 5, 0, 0, time.UTC)
+	five := 5 * time.Minute
+	tests := []struct {
+		name   string
+		period time.Duration
+		now    time.Duration // 相对 end
+		want   time.Duration // 相对 end
+	}{
+		{"本轮未到点不变", five, -time.Second, 0},
+		{"刚好到点进入下一轮", five, 0, five},
+		{"下一轮中途", five, 90 * time.Second, five},
+		{"跨过多轮（如休眠唤醒）", five, 12 * time.Minute, 3 * five},
+		{"周期非法不推进", 0, time.Minute, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := advanceRound(end, tt.period, end.Add(tt.now))
+			if want := end.Add(tt.want); !got.Equal(want) {
+				t.Errorf("got %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestLoopAndExtend(t *testing.T) {
+	start := time.Date(2026, 10, 27, 10, 0, 0, 0, time.UTC)
+	five := 5 * time.Minute
+	end := start.Add(five)
+	at := func(d time.Duration) string {
+		now := start.Add(d)
+		end = advanceRound(end, five, now)
+		return remainingText(end, now)
+	}
+	if got := at(4*time.Minute + 59*time.Second); got != "00:01" {
+		t.Fatalf("第一轮末尾 got %q", got)
+	}
+	if got := at(five); got != "05:00" {
+		t.Fatalf("进入第二轮 got %q", got)
+	}
+	end = end.Add(extendBy) // 第二轮开头加 5 分钟
+	if got := at(five + time.Minute); got != "09:00" {
+		t.Fatalf("加时后 got %q", got)
+	}
+	if got := at(3 * five); got != "05:00" {
+		t.Fatalf("加时那轮结束后回到正常周期 got %q", got)
 	}
 }
 
